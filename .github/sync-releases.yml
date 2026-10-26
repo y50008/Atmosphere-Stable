@@ -1,0 +1,84 @@
+name: Sync Releases
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-releases:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync releases from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          
+          UPSTREAM_REPO="rumla3434/Atmosphere-Stable"
+          FORK_REPO="y50008/Atmosphere-Stable"
+          
+          # 获取上游所有 releases
+          echo "Fetching releases from $UPSTREAM_REPO..."
+          releases=$(gh api repos/$UPSTREAM_REPO/releases --jq '.[] | .tag_name')
+          
+          if [ -z "$releases" ]; then
+            echo "No releases found in upstream"
+            exit 0
+          fi
+          
+          # 获取 fork 已有的 releases
+          existing=$(gh api repos/$FORK_REPO/releases --jq '.[].tag_name' || echo "")
+          
+          for tag in $releases; do
+            # 检查是否已存在
+            if echo "$existing" | grep -q "^$tag$"; then
+              echo "Release $tag already exists, skipping"
+              continue
+            fi
+            
+            echo "Syncing release $tag..."
+            
+            # 获取上游 release 详情
+            release_info=$(gh api repos/$UPSTREAM_REPO/releases/tags/$tag)
+            name=$(echo "$release_info" | jq -r '.name')
+            body=$(echo "$release_info" | jq -r '.body')
+            draft=$(echo "$release_info" | jq -r '.draft')
+            prerelease=$(echo "$release_info" | jq -r '.prerelease')
+            
+            # 创建 fork release
+            gh release create "$tag"               --repo "$FORK_REPO"               --title "$name"               --notes "$body"               --draft="$draft"               --prerelease="$prerelease"               --target master
+            
+            # 下载并上传 assets
+            assets=$(echo "$release_info" | jq -r '.assets[].url')
+            asset_count=$(echo "$release_info" | jq '.assets | length')
+            
+            if [ "$asset_count" -gt 0 ]; then
+              mkdir -p /tmp/assets
+              
+              asset_urls=$(echo "$release_info" | jq -r '.assets[] | "(.name) (.url)"')
+              
+              while IFS=' ' read -r asset_name asset_url; do
+                echo "  Downloading asset: $asset_name"
+                curl -sL -H "Authorization: token $GH_TOKEN"                   -H "Accept: application/octet-stream"                   "$asset_url" -o "/tmp/assets/$asset_name"
+                
+                echo "  Uploading asset: $asset_name"
+                gh release upload "$tag"                   --repo "$FORK_REPO"                   "/tmp/assets/$asset_name"                   --clobber
+              done <<< "$asset_urls"
+              
+              rm -rf /tmp/assets
+            fi
+            
+            echo "Release $tag synced successfully"
+          done
+          
+          echo "All releases synced"
