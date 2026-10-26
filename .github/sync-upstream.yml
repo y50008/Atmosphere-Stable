@@ -1,0 +1,40 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/rumla3434/Atmosphere-Stable.git
+          git fetch upstream --tags
+
+      - name: Merge upstream master
+        run: |
+          git checkout master
+          if git merge upstream/master --ff-only; then
+            git push origin master
+            echo "Synced master with upstream"
+          else
+            echo "Merge conflict or diverged history"
+            exit 1
+          fi
